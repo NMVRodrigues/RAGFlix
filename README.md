@@ -1,0 +1,2 @@
+# RAGFlix
+Pet project multimodal rag system. Main goal is to learn how to build and deploy a rag based system. Minimal to no claude code for actual hands on experience. Project log updated every time a change is made for tracking. Future integration with a a recommendation engine.
