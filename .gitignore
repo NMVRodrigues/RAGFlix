@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# build files
+*.toml
+*.lock
+*.python-version
+
 # Distribution / packaging
 .Python
 build/
