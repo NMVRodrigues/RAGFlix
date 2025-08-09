@@ -1,4 +1,8 @@
+import pandas as pd
+import numpy as np
+
 from langchain_core.documents import Document
+from tqdm import tqdm
 
 
 def create_documents_from_dataset(dataset: pd.DataFrame) -> list[Document]:
@@ -11,9 +15,12 @@ def create_documents_from_dataset(dataset: pd.DataFrame) -> list[Document]:
     Returns:
         list: A list of Document objects.
     """
+
     documents = []
-    for item in dataset.drop(['tmdb_id', 'imdb_id'], axis=1,inplace=True).iterrows():
-        content = f"{item['title']} : {item['overview']}"
+    for index, item in tqdm(dataset.drop(['tmdb_id', 'imdb_id'], axis=1).iterrows(), total=dataset.shape[0], desc="Creating documents"):
+        if item['overview'] == np.nan:
+            continue
+        content = f"Title: {item['title']}\n  Overview: {item['overview']}"
         metadata = item.to_dict()
         doc = Document(
             page_content=content,
