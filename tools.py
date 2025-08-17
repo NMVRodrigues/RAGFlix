@@ -1,110 +1,105 @@
-from langchain_huggingface import ChatHuggingFace, HuggingFacePipeline
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-import torch
+
 from langchain_core.messages import SystemMessage,HumanMessage
-import json
-import re
+from langchain_core.tools import tool
+
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+
+from langgraph.graph import MessagesState
+from langgraph.prebuilt import ToolNode
+
+from langchain_core.documents import Document
+from typing_extensions import List
 
 from langchain_ollama import ChatOllama
 
 # Replace your current LLM
 llm = ChatOllama(model="llama3.1:8b", temperature=0.1)
 
-"""
-# Initialize the model
-model_name = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+class State(MessagesState):
+    context: List[Document]
 
-print("Loading model and tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.float16,
-    device_map="auto",
-    trust_remote_code=True,
-    low_cpu_mem_usage=True
-)
-
-# Create the pipeline
-pipe = pipeline(
-    "text-generation",
-    model=model,
-    tokenizer=tokenizer,
-    max_new_tokens=512,
-    temperature=0.1,
-    do_sample=True,
-    repetition_penalty=1.1,
-    pad_token_id=tokenizer.eos_token_id,
-    return_full_text=False 
-)
-
-# Create LangChain components
-llm_pipeline = HuggingFacePipeline(pipeline=pipe)
-llm = ChatHuggingFace(llm=llm_pipeline)
-"""
-
-def custom_llm_with_tools(llm, tools, user_message):
-    """Custom tool calling implementation for Llama 3.2."""
+def query_or_respond(state: State):
+    """Generate tool call for movie retrieval or respond directly."""
     
-    # Format tools for Llama 3.2's expected JSON format
-    tools_json = []
-    for tool in tools:
-        tool_dict = {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query for movies"
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
-        }
-        tools_json.append(tool_dict)
+    # Add system message to encourage tool usage for movie queries
+    system_message = SystemMessage(content=(
+        "You are a movie recommendation assistant. When users ask about movies, "
+        "you should use the retrieve tool to search the movie database "
+        "before providing recommendations. Only recommend movies found in the database."
+    ))
     
-    # Format the prompt according to your model's template
-    formatted_prompt = f"""Given the following functions, please respond with a JSON for a function call with its proper arguments that best answers the given prompt.
+    # Combine system message with conversation history
+    messages_with_system = [system_message] + state["messages"]
+    
+    # Bind tools to the LLM
+    llm_with_tools = llm.bind_tools([retrieve])
+    response = llm_with_tools.invoke(messages_with_system)
+    
+    return {"messages": [response]}
 
-Respond in the format {{"name": function name, "parameters": dictionary of argument name and its value}}. Do not use variables.
+@tool(response_format="content_and_artifact")
+def retrieve(query: str):
+    """Retrieve information related to a query."""
+    # Increase k to get more movies when user asks for multiple recommendations
+    retrieved_docs = vector_store.similarity_search(query, k=6)  # Increased from 2 to 6
+    serialized = "\n\n".join(
+        (f"Source: {doc.metadata}\nContent: {doc.page_content}")
+        for doc in retrieved_docs
+    )
+    return serialized, retrieved_docs
 
-{json.dumps(tools_json, indent=2)}
+tools = ToolNode([retrieve])
 
-{user_message}"""
+def generate(state: MessagesState):
+    """Generate movie recommendation response."""
     
-    # Call the LLM
-    response = llm.invoke([HumanMessage(content=formatted_prompt)])
+    # Get the most recent tool messages (movie retrieval results)
+    recent_tool_messages = []
+    for message in reversed(state["messages"]):
+        if message.type == "tool":
+            recent_tool_messages.append(message)
+        else:
+            break
+    tool_messages = recent_tool_messages[::-1]  # Reverse to get correct order
     
-    # Parse the response to extract tool calls
-    try:
-        response_text = response.content.strip()
-        
-        # Look for JSON in the response
-        json_match = re.search(r'\{[^}]*"name"[^}]*\}', response_text)
-        if json_match:
-            tool_call_json = json.loads(json_match.group())
-            
-            # Convert to LangChain format - handle both "retrieve" and "retrieve_movies"
-            tool_name = tool_call_json["name"]
-            #if tool_name in ["retrieve", "retrieve_movies"]:
-            #    tool_name = "retrieve_movies"  # Normalize to correct name
-            
-            from langchain_core.messages import AIMessage
-            tool_calls = [{
-                "name": tool_name,
-                "args": tool_call_json.get("parameters", {}),
-                "id": f"call_{abs(hash(response_text)) % 10000}"
-            }]
-            
-            return AIMessage(content="I'll search the movie database for you.", tool_calls=tool_calls)
+    # Format movie information for the context
+    movies_content = "\n\n".join(msg.content for msg in tool_messages)
     
-    except Exception as e:
-        print(f"Error parsing tool call: {e}")
-        pass
+    # Get the most recent user question
+    user_question = ""
+    for message in reversed(state["messages"]):
+        if message.type == "human":
+            user_question = message.content
+            break
     
-    # If no tool call found, return regular response
-    return response
+    # Simplified generation prompt
+    generation_prompt = f"""You are a movie recommendation assistant. Based on the user's query and the provided movie database context, provide detailed movie recommendations.
+
+User Query: {user_question}
+
+Available Movies from Database:
+{movies_content}
+
+Instructions:
+- Recommend movies that best match the user's preferences
+- If they ask for multiple movies, recommend multiple movies from the database
+- Include relevant details like title, year, director, cast, genres, and plot
+- Explain why each movie matches their request
+- Only recommend movies that appear in the database context above
+- Format your response clearly and engagingly
+
+Provide your recommendations now:"""
+
+    # Generate response using the LLM directly
+    response = llm.invoke([HumanMessage(content=generation_prompt)])
+    
+    # Extract context from tool message artifacts for state tracking
+    context = []
+    for tool_message in tool_messages:
+        if hasattr(tool_message, 'artifact') and tool_message.artifact:
+            context.extend(tool_message.artifact)
+    
+    return {
+        "messages": [response], 
+        "context": context
+    }
