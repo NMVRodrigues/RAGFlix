@@ -7,8 +7,7 @@ def main():
     # Configuration
     PERSIST_DIR = "./chroma_langchain_db"
     COLLECTION_NAME = "movies_collection"
-    TEST_DOCUMENT_COUNT = 100  # Number of documents for testing
-    MIN_EXPECTED_DOCS = 50     # Minimum documents to consider collection "ready"
+    MIN_EXPECTED_DOCS = 9000     # Minimum documents to consider collection "ready"
     
     # Load dataset
     df = pd.read_csv(os.path.join('movie_data', 'movies_2020-01-01_2025-01-01.csv'))
@@ -17,7 +16,7 @@ def main():
     # Initialize vector database
     vector_db = VectorDB(model_name="BAAI/bge-base-en-v1.5", batch_size=32)
     init_result = vector_db.initialize_vector_store(PERSIST_DIR, COLLECTION_NAME)
-    print(init_result)
+
     
     # Check existing documents
     existing_count = vector_db.count()
@@ -37,10 +36,9 @@ def main():
         print(f"Generated {len(documents)} documents")
         
         # Use subset for testing
-        documents = documents[:TEST_DOCUMENT_COUNT]
         print(f"Adding {len(documents)} documents to collection")
         
-        final_count = vector_db.add_documents(documents, batch_size=20)
+        final_count = vector_db.add_documents(documents, batch_size=256)
         print(f"Documents added successfully. Total: {final_count}")
 
     # Continue with tests...

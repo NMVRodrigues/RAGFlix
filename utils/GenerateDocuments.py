@@ -20,7 +20,8 @@ def create_documents_from_dataset(dataset: pd.DataFrame) -> list[Document]:
     for index, item in tqdm(dataset.drop(['tmdb_id', 'imdb_id'], axis=1).iterrows(), total=dataset.shape[0], desc="Creating documents"):
         if item['overview'] == np.nan:
             continue
-        content = f"Title: {item['title']}\n  Overview: {item['overview']}"
+        content = f"Title: {item['title']}\n Release: {item['release_date']}\n Director: {item['director']}\n \
+            Runtime: {item['runtime']}\n Genres: {item['genres']}\n Overview: {item['overview']}"
         metadata = item.to_dict()
         doc = Document(
             page_content=content,
